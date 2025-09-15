@@ -1,0 +1,33 @@
+{
+  "manifest_version": 2,
+  "name": "Routine Scraper & Filler",
+  "version": "2.1",
+  "description": "Scrapes routine data and fills execution forms from an Excel file.",
+  "permissions": [
+    "activeTab",
+    "downloads"
+  ],
+  "background": {
+    "scripts": [
+      "xlsx.full.min.js",
+      "background.js"
+    ],
+    "persistent": false
+  },
+  "browser_action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://polytechnic.wbtetsd.gov.in/admin/routine_management_c/employee_routine/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    "xlsx.full.min.js"
+  ]
+}
