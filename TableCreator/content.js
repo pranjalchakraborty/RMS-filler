@@ -2,10 +2,35 @@
     'use strict';
 
     // ===================================================================================
-    // SECTION 1: CORE UTILITY FUNCTIONS (Unchanged)
+    // SECTION 1: CORE UTILITY FUNCTIONS (Defined Once)
     // ===================================================================================
 
-    const waitForElement = (selector, context = document, timeout = 7000) => {
+    const pollForCondition = (condition, timeout = 45000, timeoutMessage = 'Polling timed out') => {
+        return new Promise(resolve => {
+            const startTime = Date.now();
+            const interval = setInterval(() => {
+                if (condition()) {
+                    clearInterval(interval);
+                    resolve(true);
+                } else if (Date.now() - startTime > timeout) {
+                    clearInterval(interval);
+                    console.error(`Timeout: ${timeoutMessage}`);
+                    resolve(false);
+                }
+            }, 50);
+        });
+    };
+
+    const clickThenPoll = async (elementToClick, condition, timeoutMessage) => {
+        if (!elementToClick) {
+            console.error("Attempted to click a null element.");
+            return false;
+        }
+        elementToClick.click();
+        return await pollForCondition(condition, 45000, timeoutMessage);
+    };
+
+    const waitForElement = (selector, context = document, timeout = 20000) => {
         return new Promise(resolve => {
             const startTime = Date.now();
             const interval = setInterval(() => {
@@ -15,18 +40,11 @@
                     resolve(element);
                 } else if (Date.now() - startTime > timeout) {
                     clearInterval(interval);
-                    console.error(`Timeout: Element "${selector}" not found.`);
+                    console.error(`Timeout: Element "${selector}" not found after 20 seconds.`);
                     resolve(null);
                 }
             }, 100);
         });
-    };
-
-    const clickAndWait = async (element, delay = 1500) => {
-        if (element) {
-            element.click();
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
     };
 
     const selectOptionByText = (selectElement, textToFind) => {
@@ -41,50 +59,30 @@
         return false;
     };
 
-
     // ===================================================================================
-    // SECTION 2: DATA SCRAPING LOGIC (With Upgraded Calendar and Subject Scraping)
+    // SECTION 2: DATA SCRAPING LOGIC
     // ===================================================================================
 
-    const showCalendarProgrammatically = () => {
-        return new Promise(resolve => {
-            const scriptContent = `$('#myResultbacknew.in .datepicker_with_range').datepicker('show');`;
-            const script = document.createElement('script');
-            script.textContent = scriptContent;
-            document.body.appendChild(script);
-            document.body.removeChild(script);
-            setTimeout(resolve, 300);
-        });
-    };
-
-    /**
-     * NEW: Upgraded function to scrape both past and future dates without duplicates.
-     * @param {Set<string>} dateSet - A Set object to store unique dates.
-     * @param {'prev' | 'next'} direction - The direction to navigate ('prev' for past, 'next' for future).
-     */
     const scrapeCalendarInDirection = async (dateSet, direction) => {
-        let calendar = await waitForElement('.datepicker.datepicker-dropdown');
-        if (!calendar) return; // Exit if calendar not found
+        const calendarExists = await pollForCondition(() => document.querySelector('.datepicker.datepicker-dropdown'), 5000, "Calendar did not appear.");
+        if (!calendarExists) return;
 
+        let calendar = document.querySelector('.datepicker.datepicker-dropdown');
         while (true) {
-            // Scrape dates from the currently visible month
             calendar.querySelectorAll('.day.allowed-date:not(.old):not(.new)').forEach(el => {
                 const timestamp = el.getAttribute('data-date');
                 if (timestamp) {
                     const date = new Date(parseInt(timestamp));
-                    // Format date as YYYY-MM-DD and add to the Set
                     dateSet.add(date.getFullYear() + '-' + ('0' + (date.getMonth() + 1)).slice(-2) + '-' + ('0' + date.getDate()).slice(-2));
                 }
             });
-
-            // Find the navigation button for the specified direction
             const navButton = calendar.querySelector(`.${direction}:not(.disabled)`);
             if (navButton) {
-                await clickAndWait(navButton, 500); // Click and wait for the calendar to update
-                calendar = await waitForElement('.datepicker.datepicker-dropdown'); // Re-find the calendar
-                if (!calendar) break;
+                navButton.click();
+                await new Promise(r => setTimeout(r, 500));
+                calendar = document.querySelector('.datepicker.datepicker-dropdown');
             } else {
-                break; // Exit loop if the button is disabled or not found
+                break;
             }
         }
     };
@@ -100,60 +98,62 @@
                 const cell = button.closest('td');
                 const row = button.closest('tr');
                 if (!row || !cell) continue;
-
                 const columnNumber = cell.cellIndex;
                 const day = row.cells[0]?.textContent.trim();
 
-                await clickAndWait(button);
-                const modal = await waitForElement('#myResultbacknew.in');
-                if (!modal) continue;
+                const modalAppeared = await clickThenPoll(button, () => document.querySelector('#myResultbacknew'), "Modal did not appear after clicking 'Class Execution' button.");
+                if (!modalAppeared) {
+                    console.error("Skipping a routine slot because the modal failed to load.");
+                    continue;
+                }
+                const modal = document.querySelector('#myResultbacknew');
 
-                // --- CHANGE 2: Scrape ALL subjects from the dropdown ---
-                const subjects = [];
                 const subjectSelect = await waitForElement('#subject_name_no', modal);
+                const subjects = [];
                 if (subjectSelect) {
-                    // Start from index 1 to skip the "--Select Subject--" placeholder
                     for (let i = 1; i < subjectSelect.options.length; i++) {
                         subjects.push(subjectSelect.options[i].text.trim());
                     }
                 }
-                if (subjects.length === 0) subjects.push('Subject Not Found'); // Fallback
+                if (subjects.length === 0) subjects.push('Subject Not Found');
                 
-                // --- CHANGE 3: Scrape both past and future dates ---
                 const uniqueDates = new Set();
-                
-                // Phase 1: Scrape backwards (past)
                 document.querySelectorAll('.datepicker.datepicker-dropdown').forEach(cal => cal.remove());
-                await showCalendarProgrammatically();
+                
+                const dateInput = await waitForElement('input.datepicker_with_range', modal);
+                if (dateInput) dateInput.click();
+                
                 await scrapeCalendarInDirection(uniqueDates, 'prev');
 
-                // Phase 2: Reset and scrape forwards (future)
-                // We close and reopen the modal to reset the calendar to the default month
-                await clickAndWait(modal.querySelector('button.close_btn'), 500);
-                await clickAndWait(button); // Reopen the same modal
-                const reopenedModal = await waitForElement('#myResultbacknew.in');
-                if (!reopenedModal) continue;
+                const closeButtonForReset = modal.querySelector('button.close_btn');
+                const modalDisappearedForReset = await clickThenPoll(closeButtonForReset, () => !document.querySelector('#myResultbacknew'));
+                if(!modalDisappearedForReset) continue;
+
+                const modalReappeared = await clickThenPoll(button, () => document.querySelector('#myResultbacknew'));
+                if(!modalReappeared) continue;
                 
+                const reopenedModal = document.querySelector('#myResultbacknew');
                 document.querySelectorAll('.datepicker.datepicker-dropdown').forEach(cal => cal.remove());
-                await showCalendarProgrammatically();
+                
+                const dateInput2 = await waitForElement('input.datepicker_with_range', reopenedModal);
+                if (dateInput2) dateInput2.click();
+
                 await scrapeCalendarInDirection(uniqueDates, 'next');
 
                 const allDates = Array.from(uniqueDates);
-
-                // --- Combine all subjects with all dates ---
                 subjects.forEach(subject => {
                     allDates.forEach(date => {
                         data.push({ "Days": day, "Column": columnNumber, "Subject": subject, "Date": date });
                     });
                 });
+                
+                const finalCloseButton = document.querySelector('#myResultbacknew button.close_btn');
+                await clickThenPoll(finalCloseButton, () => !document.querySelector('#myResultbacknew'));
 
-                await clickAndWait(reopenedModal.querySelector('button.close_btn'), 500);
             } catch (error) {
                 console.error("An error occurred during scraping a routine slot:", error);
-                const openModal = document.querySelector('#myResultbacknew.in');
-                if (openModal) {
-                    await clickAndWait(openModal.querySelector('button.close_btn'), 500);
-                }
+                const openModal = document.querySelector('#myResultbacknew');
+                if (openModal) openModal.querySelector('button.close_btn')?.click();
             }
         }
     
@@ -161,15 +161,15 @@
             alert(`Scraping complete! Found ${data.length} records. The file download will now begin.`);
             chrome.runtime.sendMessage({ action: 'download_data', data: data });
         } else {
-            alert("Scraping finished, but no data was found. Please check the console for errors.");
+            alert("Scraping finished, but no data was found.");
         }
     };
 
 
     // ===================================================================================
-    // SECTION 3: FORM FILLING LOGIC (With "Yes" Trigger)
+    // SECTION 3: FORM FILLING LOGIC
     // ===================================================================================
-    
+
     const normalizeDataKeys = (data) => data.map(row => Object.keys(row).reduce((acc, key) => { acc[key.trim()] = row[key]; return acc; }, {}));
 
     const fillFormsFromExcel = async (data) => {
@@ -177,19 +177,13 @@
         const routineTable = document.querySelector('.table.table-bordered');
         if (!routineTable) { alert("Fatal Error: Could not find routine table."); return; }
 
-        // --- CHANGE 1: Filter logic now checks for "yes" in the 'Submitted' column ---
-        const rowsToProcess = processedData.filter(row => {
-            const submittedStatus = String(row['Submitted'] || '').trim().toLowerCase();
-            const executionStatus = String(row['Class Execution'] || '').trim().toLowerCase();
-            return submittedStatus === 'yes' && ['yes', 'no'].includes(executionStatus);
-        });
+        const rowsToProcess = processedData.filter(row => String(row['Submitted'] || '').trim().toLowerCase() === 'yes' && ['yes', 'no'].includes(String(row['Class Execution'] || '').trim().toLowerCase()));
 
-        if (rowsToProcess.length === 0) { 
-            alert("No records to process were found. Ensure the 'Submitted' column is marked as 'Yes' for the rows you wish to process."); 
-            return; 
+        if (rowsToProcess.length === 0) {
+            alert("No records to process were found. Ensure 'Submitted' column is 'Yes'.");
+            return;
         }
-        
-        alert(`Found ${rowsToProcess.length} records marked for processing. The automation will now begin.`);
+        alert(`Found ${rowsToProcess.length} records marked for processing. Automation will now begin.`);
 
         for (const rowData of rowsToProcess) {
             console.group(`Processing Excel Row for Date: ${rowData.Date}`);
@@ -200,50 +194,58 @@
                 const execButton = tableRow.cells[parseInt(rowData.Column, 10)]?.querySelector('a.class_execution_data');
                 if (!execButton) throw new Error(`Could not find 'Class Execution' button`);
 
-                await clickAndWait(execButton, 2000);
-                const modal = await waitForElement('#myResultbacknew.in');
-                if (!modal) throw new Error("Execution modal did not open.");
+                const modalAppeared = await clickThenPoll(execButton, () => document.querySelector('#myResultbacknew'), "Modal did not appear after clicking 'Class Execution' button.");
+                if (!modalAppeared) throw new Error("Modal failed to load.");
+                const modal = document.querySelector('#myResultbacknew');
 
-                (await waitForElement('input.datepicker_with_range', modal)).value = rowData.Date;
-                const classExecDropdown = await waitForElement('#class_execution_yes_no', modal);
+                const datePicker = await pollForCondition(() => modal.querySelector('input.datepicker_with_range'));
+                if(datePicker) { // Check if element exists before setting value
+                    modal.querySelector('input.datepicker_with_range').value = rowData.Date;
+                }
+                
+                const classExecDropdown = await pollForCondition(() => modal.querySelector('#class_execution_yes_no'));
                 const executionStatus = String(rowData['Class Execution']).trim().toLowerCase();
 
                 if (executionStatus === 'yes') {
                     classExecDropdown.value = '1';
                     classExecDropdown.dispatchEvent(new Event('change', { bubbles: true }));
-                    await new Promise(r => setTimeout(r, 500)); 
-                    if (!selectOptionByText(await waitForElement('#subject_name_no', modal), rowData.Subject)) throw new Error(`Subject "${rowData.Subject}" could not be selected.`);
-                    (await waitForElement('#class_execution_yes', modal)).value = rowData['Topic (Yes)'] || '';
-                    (await waitForElement('#registerd_class', modal)).value = rowData['Total Students'] || '';
-                    (await waitForElement('#attended_class', modal)).value = rowData['Attended Students'] || '';
+                    const topicFieldAppeared = await pollForCondition(() => modal.querySelector('#class_execution_yes')?.offsetParent !== null, 5000, "Topic field did not appear.");
+                    if (!topicFieldAppeared) throw new Error("Topic field failed to appear after selecting 'Yes'.");
+                    if (!selectOptionByText(modal.querySelector('#subject_name_no'), rowData.Subject)) throw new Error(`Subject "${rowData.Subject}" could not be selected.`);
+                    modal.querySelector('#class_execution_yes').value = rowData['Topic (Yes)'] || '';
+                    modal.querySelector('#registerd_class').value = rowData['Total Students'] || '';
+                    modal.querySelector('#attended_class').value = rowData['Attended Students'] || '';
                 } else if (executionStatus === 'no') {
                     classExecDropdown.value = '0';
                     classExecDropdown.dispatchEvent(new Event('change', { bubbles: true }));
-                    await new Promise(r => setTimeout(r, 500));
-                    if (!selectOptionByText(await waitForElement('#class_execution_no', modal), rowData['Reason (No)'])) throw new Error(`Reason "${rowData['Reason (No)']}" could not be selected.`);
+                    const reasonFieldAppeared = await pollForCondition(() => modal.querySelector('#class_execution_no')?.offsetParent !== null, 5000, "Reason field did not appear.");
+                    if (!reasonFieldAppeared) throw new Error("Reason field failed to appear after selecting 'No'.");
+                    if (!selectOptionByText(modal.querySelector('#class_execution_no'), rowData['Reason (No)'])) throw new Error(`Reason "${rowData['Reason (No)']}" could not be selected.`);
                 }
                 
-                // Auto-submit without confirmation
                 console.log("Submitting form automatically...");
-                await clickAndWait(modal.querySelector('input.confirm_result_revart_back'), 2500);
-                rowData.Submitted = 'Processed (Success)'; // Update status for the final report
-                
+                const submitButton = modal.querySelector('input.confirm_result_revart_back');
+                const modalDisappeared = await clickThenPoll(submitButton, () => !document.querySelector('#myResultbacknew'), "Modal did not disappear after clicking submit. Submission may have failed.");
+                if (modalDisappeared) {
+                    rowData.Submitted = 'Processed (Success)';
+                } else {
+                    throw new Error("Modal did not close, indicating a possible submission failure.");
+                }
             } catch (error) {
                 console.error('An error occurred processing row:', error);
-                rowData.Submitted = `Processed (Error: ${error.message})`; // Update status with the error
-                const openModal = document.querySelector('#myResultbacknew.in');
-                if (openModal) await clickAndWait(openModal.querySelector('button.close_btn'), 500);
+                rowData.Submitted = `Processed (Error: ${error.message})`;
+                const openModal = document.querySelector('#myResultbacknew');
+                if (openModal) openModal.querySelector('button.close_btn')?.click();
             } finally {
                 console.groupEnd();
             }
         }
-        
         alert("Finished processing all entries. The updated Excel report will now be downloaded.");
         chrome.runtime.sendMessage({ action: 'download_updated_excel', data: processedData });
     };
 
     // ===================================================================================
-    // SECTION 4: MAIN MESSAGE LISTENER (Unchanged)
+    // SECTION 4: MAIN MESSAGE LISTENER
     // ===================================================================================
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -253,7 +255,6 @@
             fillFormsFromExcel(request.data);
         }
         sendResponse({ status: 'action received' });
-        return true; 
+        return true;
     });
-
 })();
