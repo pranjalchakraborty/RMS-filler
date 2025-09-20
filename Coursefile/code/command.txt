@@ -1,0 +1,5 @@
+set GOOGLE_API_KEY='AIzaSyBCVhNw1Ibtll1DXhLQotjcXWs3jAnjfUE'
+
+pyinstaller --name Bloom --onefile bloom.py
+pyinstaller --name Routine --onefile routine.py
+pyinstaller --name CourseFile --onefile coursefile.py
