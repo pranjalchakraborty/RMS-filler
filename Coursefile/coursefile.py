@@ -43,8 +43,8 @@ def get_gemini_model():
             return None
         genai.configure(api_key=api_key)
         logging.info("Gemini API configured successfully for the session.")
-        # As per the proven script's environment
-        GEMINI_MODEL = genai.GenerativeModel('gemini-2.5-pro') 
+        # FINAL FIX: Using the correct, more capable model as per the proven script
+        GEMINI_MODEL = genai.GenerativeModel('gemini-2.5-pro')
         return GEMINI_MODEL
     except Exception as e:
         messagebox.showerror("API Error", f"Failed to configure the Gemini API: {e}")
@@ -139,6 +139,13 @@ def extract_course_details(course_file_path):
 def normalize_string(s):
     return re.sub(r'[^a-z0-9]', '', str(s).lower())
 
+def get_script_directory():
+    """Returns the directory of the script or the compiled executable."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
 # ==============================================================================
 # SECTION 2: BLOOMS TAXONOMY
 # ==============================================================================
@@ -206,9 +213,7 @@ def extract_semester_from_text(text):
     return None
 
 def routine_get_document_context(doc_path):
-    """
-    FIXED: Restored the proven, correct blueprint generation logic from the reference script.
-    """
+    """The proven, correct blueprint generation logic from the reference script."""
     try:
         doc = Document(doc_path)
         doc_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
@@ -226,13 +231,11 @@ def routine_get_document_context(doc_path):
                 visited_cells.add(cell)
                 start_row, start_col, end_row, end_col = r_idx, c_idx, r_idx, c_idx
 
-                # Correct, proven logic for calculating horizontal span
                 for c in range(c_idx + 1, total_columns):
                     if table.cell(r_idx, c) == cell:
                         end_col = c
                     else:
                         break
-                # Correct, proven logic for calculating vertical span
                 for r in range(r_idx + 1, total_rows):
                     if table.cell(r, c_idx) == cell:
                         end_row = r
@@ -257,9 +260,7 @@ def routine_get_document_context(doc_path):
         return None
 
 def routine_generate_fill_instructions(model, r1_ctx, r2_ctx, cl_ctx, initials):
-    """
-    FIXED: Restored the proven, correct prompt from the reference script.
-    """
+    """The proven, correct prompt from the reference script."""
     prompt = f"""
     You are an expert system for academic schedule consolidation. Your task is to analyze two source routines and generate a set of precise instructions to fill a clean template for a teacher with the initials "{initials}".
 
@@ -283,17 +284,16 @@ def routine_generate_fill_instructions(model, r1_ctx, r2_ctx, cl_ctx, initials):
 
     **YOUR TASK:**
     Your goal is to generate a JSON array of "fill instructions". Do not generate a table.
-    1.  **Identify Semesters:** Read the 'Document Text' for Routine 1 and Routine 2 to determine the semester for each (e.g., "3rd sem", "5th sem").
+    1.  **Identify Semesters:** Read the 'Document Text' for Routine 1 and Routine 2 to determine the semester for each.
     2.  **Find Teacher's Classes:** Analyze the 'cells' list in the blueprints for Routine 1 and Routine 2. Find all cell objects where the `text` contains the marker "{initials}".
-    3.  **Generate Instructions:** For each class you find for "{initials}", you must generate one or more fill instructions. Append the correct semester tag.
-    4.  A single source cell might be merged, spanning multiple coordinates. You MUST generate a separate fill instruction object for **each coordinate** it covers.
+    3.  **Generate Instructions:** For each class you find, generate one or more fill instructions. Append the correct semester tag.
+    4.  A single source cell might be merged. You MUST generate a separate fill instruction object for **each coordinate** it covers.
     5.  **Handle Conflicts:** If two different classes for "{initials}" are scheduled for the exact same coordinate `(r, c)`, combine their text into a single instruction, separated by a newline (`\\n`).
     6.  **Final Output:** Your response must ONLY be a valid JSON array of instruction objects. Each object must have three keys: `row`, `column`, and `text_to_fill`.
     """
     try:
         response = model.generate_content(prompt)
-        cleaned_response = response.text.strip().replace('```json', '').replace('```', '').strip()
-        return cleaned_response
+        return response.text.strip().replace('```json', '').replace('```', '').strip()
     except Exception as e:
         logging.error(f"API call for routine instructions failed: {e}")
         return None
@@ -315,14 +315,14 @@ def routine_fill_and_save_routine(clean_path, instructions_json, save_path):
         return True
     except (json.JSONDecodeError, KeyError) as e:
         logging.error(f"Error filling/saving routine: {e}")
-        logging.error(f"Invalid JSON may have been received from API.")
         return False
 
 def run_routine_process(main_course_doc, semester_from_course):
     """Main logic to orchestrate routine generation and pasting."""
     logging.info("\n--- Starting Routine Generation and Integration ---")
     teacher_initials = "RC"
-    personal_routine_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"personal_routine_{teacher_initials}.docx")
+    script_dir = get_script_directory()
+    personal_routine_path = os.path.join(script_dir, f"personal_routine_{teacher_initials}.docx")
     
     r1_path = select_file("Select FIRST Class Routine (Source 1)")
     r2_path = select_file("Select SECOND Class Routine (Source 2)")
@@ -346,10 +346,13 @@ def run_routine_process(main_course_doc, semester_from_course):
         gemini_model = get_gemini_model()
         if not gemini_model: return
 
-        clean_path = select_file("Select the Clean Empty Routine (Template)")
-        if not clean_path:
-            logging.error("Clean routine template not selected. Cannot generate personal routine.")
+        clean_path = os.path.join(script_dir, "clean_routine.docx")
+        if not os.path.exists(clean_path):
+            logging.error(f"'clean_routine.docx' not found in the script's directory: {script_dir}")
+            messagebox.showerror("File Not Found", f"'clean_routine.docx' must be in the same folder as the script/exe.")
             return
+        
+        logging.info(f"Using clean routine template: {clean_path}")
         
         cl_ctx = routine_get_document_context(clean_path)
         if not (r1_ctx and r2_ctx and cl_ctx):
@@ -385,8 +388,14 @@ def run_routine_process(main_course_doc, semester_from_course):
 # ==============================================================================
 
 def generate_course_files():
-    excel_path = select_file("Select Excel Class Log", [("Excel Files", "*.xlsx *.xls")])
-    if not excel_path: return
+    """Generates course files from a user-selected Excel file."""
+    # FINAL FIX: Restore user prompt for selecting the Excel file.
+    excel_path = select_file("Select the Excel Class Log File", [("Excel Files", "*.xlsx *.xls")])
+    if not excel_path:
+        logging.warning("No Excel file selected by user. Aborting course table generation.")
+        return
+    
+    script_dir = get_script_directory()
     try:
         df = pd.read_excel(excel_path, engine='openpyxl')
         df.columns = df.columns.str.strip()
@@ -412,21 +421,27 @@ def generate_course_files():
                 cells[2].text = 'Chalk & Talk'; cells[3].text = f"{int(hours):02}"
             
             safe_subject = re.sub(r'[\\/*?:"<>|]', "", str(subject))
-            doc.save(f"CourseFile_{safe_subject}.docx")
-            logging.info(f"Successfully saved 'CourseFile_{safe_subject}.docx'")
+            save_path = os.path.join(script_dir, f"CourseFile_{safe_subject}.docx")
+            doc.save(save_path)
+            logging.info(f"Successfully saved '{os.path.basename(save_path)}'")
     except Exception as e:
         logging.error(f"Error during Excel processing: {e}")
 
 def run_course_table_process(main_course_doc, course_name):
     logging.info("\n--- Starting Course Table Generation and Integration ---")
+    script_dir = get_script_directory()
     normalized_course_name = normalize_string(course_name)
-    found_file_path = None
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    safe_subject_name = re.sub(r'[\\/*?:"<>|]', "", course_name)
+    target_filename = f"CourseFile_{safe_subject_name}.docx"
+    logging.info(f"Searching for course table file: '{target_filename}'")
 
+    found_file_path = None
     for filename in os.listdir(script_dir):
         if filename.lower().startswith('coursefile_') and filename.lower().endswith('.docx'):
             if normalize_string(filename[11:-5]) == normalized_course_name:
                 found_file_path = os.path.join(script_dir, filename)
+                logging.info(f"Match found. Using file: '{filename}'")
                 break
     
     regenerate = False
@@ -440,7 +455,7 @@ def run_course_table_process(main_course_doc, course_name):
     if regenerate:
         logging.info("Running course table generation from Excel.")
         generate_course_files()
-        found_file_path = None
+        found_file_path = None # Reset to search again
         for filename in os.listdir(script_dir):
             if filename.lower().startswith('coursefile_') and filename.lower().endswith('.docx'):
                 if normalize_string(filename[11:-5]) == normalized_course_name:

@@ -1,6 +1,7 @@
 import google.generativeai as genai
 import docx
 import os
+import sys
 import tkinter as tk
 from tkinter import filedialog
 import logging
@@ -24,6 +25,17 @@ def select_file(prompt_title):
     )
     return file_path
 
+def get_application_path():
+    """
+    Returns the base path for the application, whether running as a script or
+    a frozen PyInstaller executable.
+    """
+    if getattr(sys, 'frozen', False):
+        application_path = os.path.dirname(sys.executable)
+    else:
+        application_path = os.path.dirname(os.path.realpath(__file__))
+    return application_path
+
 def configure_gemini_api():
     """Configures the Gemini API with the user's key."""
     try:
@@ -41,8 +53,7 @@ def configure_gemini_api():
 
 def get_document_context(doc_path):
     """
-    Extracts all paragraph text and creates a perfect JSON blueprint of the first table,
-    including dimensions and a list of unique cells with their text, width, and spans.
+    Extracts all paragraph text and creates a perfect JSON blueprint of the first table.
     """
     try:
         doc = docx.Document(doc_path)
@@ -207,21 +218,28 @@ def main():
         logging.critical("Exiting due to API configuration failure.")
         return
 
-    # User interaction
+    # --- CHANGE: Teacher initials are now hardcoded ---
+    teacher_initials = "RC"
+    logging.info(f"Processing routine for teacher: {teacher_initials}")
+
+    # User selects the two source routines
     routine1_path = select_file("Select the FIRST Filled Routine (Source 1)")
     if not routine1_path: return
 
     routine2_path = select_file("Select the SECOND Filled Routine (Source 2)")
     if not routine2_path: return
     
-    clean_routine_path = select_file("Select the Clean Empty Routine (Template)")
-    if not clean_routine_path: return
-
-    #teacher_initials = input("Enter the teacher's initials to generate the routine for (e.g., RC): ").strip().upper()
-    #if not teacher_initials:
-    teacher_initials = "RC" # Default to RC if nothing is entered
-    logging.info("No initials entered. Defaulting to 'RC'.")
-
+    # --- CHANGE: Automatically locate the clean routine template ---
+    application_path = get_application_path()
+    clean_routine_path = os.path.join(application_path, "clean_routine.docx")
+    
+    if not os.path.exists(clean_routine_path):
+        logging.error(f"CRITICAL ERROR: 'clean_routine.docx' not found in the application directory.")
+        logging.error(f"Please make sure the template file is in the same folder as the script/EXE: {application_path}")
+        # Use tkinter to show an error message box to the user
+        tk.Tk().withdraw()
+        tk.messagebox.showerror("Error", f"'clean_routine.docx' not found.\nPlease place it in the same folder as the application and try again.")
+        return
 
     # Data extraction
     logging.info("Analyzing files and creating structural blueprints...")
@@ -239,20 +257,18 @@ def main():
         logging.error("Failed to generate fill instructions from the API. Exiting.")
         return
         
-    # --- CHANGE: Automatic save path ---
-    # Get the directory where the script is located
-    script_directory = os.path.dirname(os.path.realpath(__file__))
-    # Create the output filename
+    # Automatic save path
     output_filename = f"personal_routine_{teacher_initials}.docx"
-    # Combine them to get the full save path
-    save_path = os.path.join(script_directory, output_filename)
+    save_path = os.path.join(application_path, output_filename)
     logging.info(f"Output will be saved as: {save_path}")
-    # ------------------------------------
         
     # Final processing and saving
     fill_and_save_routine(clean_routine_path, fill_instructions_json_str, save_path)
     
     logging.info("--- Process completed. ---")
+    # Use tkinter to show a success message
+    tk.Tk().withdraw()
+    tk.messagebox.showinfo("Success", f"Process completed!\n\nYour personal routine has been saved as:\n{save_path}")
 
 
 if __name__ == "__main__":
